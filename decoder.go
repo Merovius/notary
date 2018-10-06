@@ -3,6 +3,7 @@ package roughtime
 import (
 	"encoding/binary"
 	"errors"
+	"runtime/debug"
 	"time"
 )
 
@@ -19,17 +20,20 @@ var (
 )
 
 type decodeState struct {
-	msg []byte
-	err *error
-	i   uint32
-	n   uint32
+	hdr  []byte
+	body []byte
+	err  *error
+	i    uint32
+	n    uint32
 }
 
 var sentinel = new(int8)
 
 func decode(msg []byte, f func(st *decodeState)) (err error) {
 	defer func() {
-		if v := recover(); v != sentinel && v != nil {
+		if v := recover(); v == sentinel {
+			debug.PrintStack()
+		} else if v != nil {
 			panic(v)
 		}
 	}()
@@ -55,38 +59,40 @@ func (d *decodeState) SetMessage(b []byte) {
 		d.check(errMsgTooShort)
 	}
 	var (
-		t = binary.LittleEndian.Uint32(b[4:])
+		t = binary.LittleEndian.Uint32(b[4*d.n:])
 		o uint32
 	)
 	for i := uint32(1); i < d.n; i++ {
-		t2, o2 := binary.LittleEndian.Uint32(b[i*4:]), binary.LittleEndian.Uint32(b[d.n*4+i*4:])
+		o2, t2 := binary.LittleEndian.Uint32(b[i*4:]), binary.LittleEndian.Uint32(b[d.n*4+i*4:])
 		if t2 <= t || o2 < o || o2 >= uint32(len(b)) {
 			d.check(errInvalidMessage)
 		}
+		t, o = t2, o2
 	}
-	d.msg = b
+	d.hdr = b[0 : 8*d.n : 8*d.n]
+	d.body = b[8*d.n:]
 }
 
 func (d *decodeState) Bytes(t Tag, p *[]byte) {
 	for ; d.i < d.n; d.i++ {
-		tag := Tag(binary.LittleEndian.Uint32(d.msg[d.n*4+d.i*4:]))
+		tag := Tag(binary.LittleEndian.Uint32(d.hdr[d.n*4+d.i*4:]))
 		if tag > t {
 			continue
 		}
 		if tag < t {
 			d.check(errFieldMissing)
 		}
-		start, end := uint32(0), uint32(len(d.msg))
+		start, end := uint32(0), uint32(len(d.body))
 		if d.i > 0 {
-			start = binary.LittleEndian.Uint32(d.msg[d.i*4:])
+			start = binary.LittleEndian.Uint32(d.hdr[d.i*4:])
 		}
-		if d.i < d.n {
-			end = binary.LittleEndian.Uint32(d.msg[(d.i+1)*4:])
+		if d.i+1 < d.n {
+			end = binary.LittleEndian.Uint32(d.hdr[(d.i+1)*4:])
 		}
 		if end < start || ((end-start)%4 != 0) {
 			d.check(errInvalidField)
 		}
-		*p = d.msg[start:end]
+		*p = d.body[start:end]
 		d.i++
 		return
 	}
@@ -135,7 +141,8 @@ func (d *decodeState) Message(t Tag, f func(*decodeState)) {
 	if len(buf) < 4 {
 		d.check(errInvalidMessage)
 	}
-	st := &decodeState{msg: buf, err: d.err}
+	st := &decodeState{err: d.err}
+	st.SetMessage(buf)
 	f(st)
 }
 
