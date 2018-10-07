@@ -73,8 +73,8 @@ func (r *Response) decodePath(st *wire.DecodeState) {
 func (r *Response) decode(st *wire.DecodeState) {
 	st.Bytes64(SIG, &r.Signature)
 	r.decodePath(st)
-	st.Message(SREP, r.SignedResponse.decode)
-	st.Message(CERT, r.Certificate.decode)
+	st.Message(SREP, &r.SignedResponse.Raw, r.SignedResponse.decode)
+	st.Message(CERT, &r.Certificate.Raw, r.Certificate.decode)
 	st.Uint32(INDX, &r.Index)
 }
 
@@ -87,6 +87,8 @@ func (r *Response) encode(st *wire.EncodeState) {
 }
 
 type SignedResponse struct {
+	Raw []byte
+
 	Root     [64]byte
 	Midpoint time.Time
 	Radius   time.Duration
@@ -112,7 +114,7 @@ type Certificate struct {
 
 func (c *Certificate) decode(st *wire.DecodeState) {
 	st.Bytes64(SIG, &c.Signature)
-	st.Message(DELE, c.Delegation.decode)
+	st.Message(DELE, &c.Delegation.Raw, c.Delegation.decode)
 }
 
 func (c *Certificate) encode(st *wire.EncodeState) {
@@ -122,6 +124,8 @@ func (c *Certificate) encode(st *wire.EncodeState) {
 }
 
 type Delegation struct {
+	Raw []byte
+
 	Min       time.Time
 	Max       time.Time
 	PublicKey [32]byte
@@ -147,6 +151,12 @@ func ParseResponse(resp, nonce []byte, root ed25519.PublicKey) (m time.Time, r t
 	}
 	if len(nonce) != 64 {
 		panic("nonce has wrong length")
+	}
+	if !ed25519.Verify(root, append(contextCertificate, res.Certificate.Delegation.Raw...), res.Certificate.Signature[:]) {
+		return time.Time{}, 0, errors.New("bad delegation")
+	}
+	if !ed25519.Verify(res.Certificate.Delegation.PublicKey[:], append(contextSignedResponse, res.SignedResponse.Raw...), res.Signature[:]) {
+		return time.Time{}, 0, errors.New("bad signature")
 	}
 
 	idx := res.Index

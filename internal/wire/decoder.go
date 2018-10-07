@@ -135,7 +135,7 @@ func (d *DecodeState) Bytes64(t Tag, p *[64]byte) {
 	copy((*p)[:], buf)
 }
 
-func (d *DecodeState) Message(t Tag, f func(*DecodeState)) {
+func (d *DecodeState) Message(t Tag, raw *[]byte, f func(*DecodeState)) {
 	var buf []byte
 	d.Bytes(t, &buf)
 	if len(buf) < 4 {
@@ -144,6 +144,7 @@ func (d *DecodeState) Message(t Tag, f func(*DecodeState)) {
 	st := &DecodeState{err: d.err}
 	st.SetMessage(buf)
 	f(st)
+	*raw = buf
 }
 
 func (d *DecodeState) Time(t Tag, p *time.Time) {
