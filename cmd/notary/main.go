@@ -1,30 +1,25 @@
 package main
 
 import (
-	"encoding/base64"
 	"flag"
-	"fmt"
+	"io"
 	"log"
 	"os"
-
-	"golang.org/x/crypto/ed25519"
+	"strings"
 
 	"github.com/Merovius/roughtime"
+	config "github.com/Merovius/roughtime/internal/config"
 )
 
 func main() {
 	verify := flag.Bool("verify", false, "verify a given chain")
+	serversJSON := flag.String("servers", "", "server-list to use")
 	flag.Parse()
 
-	f, err := os.Open("servers.json")
+	servers, err := serverList(*serversJSON)
 	if err != nil {
 		log.Fatal(err)
 	}
-	servers, err := roughtime.ReadServersJSON(f)
-	if err != nil {
-		log.Fatal(err)
-	}
-	f.Close()
 
 	if *verify {
 		if err := roughtime.VerifyChain(os.Stdin, servers); err != nil {
@@ -32,19 +27,47 @@ func main() {
 		}
 		return
 	}
-
 	if err := roughtime.Chain(os.Stdout, servers, nil); err != nil {
 		log.Fatal(err)
 	}
-
-	return
-	key, err := base64.StdEncoding.DecodeString("etPaaIxcBMY1oUeGpwvPMCJMwlRVNxv51KK/tktoJTQ=")
-	if err != nil {
-		log.Fatal(err)
-	}
-	m, r, err := roughtime.FetchRoughtime(&roughtime.Server{"roughtime.sandbox.google.com:2002", ed25519.PublicKey(key)}, nil)
-	if err != nil {
-		log.Fatal(err)
-	}
-	fmt.Printf("%v ± %v\n", m, r)
 }
+
+func serverList(name string) (*config.ServersJSON, error) {
+	r := io.Reader(strings.NewReader(defaultServers))
+	if name != "" {
+		f, err := os.Open(name)
+		if err != nil {
+			return nil, err
+		}
+		defer f.Close()
+		r = f
+	}
+	return roughtime.ReadServersJSON(r)
+}
+
+var defaultServers = `{
+	"servers": [
+		{
+			"name": "Google",
+			"publicKeyType": "ed25519",
+			"publicKey": "etPaaIxcBMY1oUeGpwvPMCJMwlRVNxv51KK/tktoJTQ=",
+			"addresses": [
+				{
+					"protocol": "udp",
+					"address": "roughtime.sandbox.google.com:2002"
+				}
+			]
+		},
+		{
+			"name": "Cloudflare",
+			"publicKeyType": "ed25519",
+			"publicKey": "gD63hSj3ScS+wuOeGrubXlq35N1c5Lby/S+T7MNTjxo=",
+			"addresses": [
+				{
+					"protocol": "udp",
+					"address": "roughtime.cloudflare.com:2002"
+				}
+			]
+		}
+	]
+}`
