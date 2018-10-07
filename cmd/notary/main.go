@@ -15,7 +15,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	m, r, err := roughtime.FetchRoughtime("roughtime.sandbox.google.com:2002", ed25519.PublicKey(key))
+	m, r, err := roughtime.FetchRoughtime(&roughtime.Server{"roughtime.sandbox.google.com:2002", ed25519.PublicKey(key)})
 	if err != nil {
 		log.Fatal(err)
 	}

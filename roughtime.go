@@ -108,6 +108,8 @@ func (r *signedResponse) encode(st *wire.EncodeState) {
 }
 
 type certificate struct {
+	raw []byte
+
 	signature [64]byte
 	delegation
 }
@@ -144,65 +146,32 @@ func (d *delegation) encode(st *wire.EncodeState) {
 	st.Bytes32(tPUBK, d.publicKey)
 }
 
-func ParseResponse(resp, nonce []byte, root ed25519.PublicKey) (m time.Time, r time.Duration, err error) {
-	var res response
-	if err := wire.Decode(resp, res.decode); err != nil {
-		return time.Time{}, 0, err
-	}
-	if len(nonce) != 64 {
-		panic("nonce has wrong length")
-	}
-	if !ed25519.Verify(root, append(contextCertificate, res.certificate.delegation.raw...), res.certificate.signature[:]) {
-		return time.Time{}, 0, errors.New("bad delegation")
-	}
-	if !ed25519.Verify(res.certificate.delegation.publicKey[:], append(contextSignedResponse, res.signedResponse.raw...), res.signature[:]) {
-		return time.Time{}, 0, errors.New("bad signature")
-	}
-
-	idx := res.index
-	path := res.path
-	hash := hashLeaf(nonce)
-	for len(path) > 0 {
-		if idx&1 == 0 {
-			hash = hashNode(hash, path[0])
-		} else {
-			hash = hashNode(path[0], hash)
-		}
-		idx >>= 1
-		path = path[1:]
-	}
-	if hash != res.root {
-		return time.Time{}, 0, errors.New("verification error")
-	}
-
-	mp := res.midpoint
-	if mp.Before(res.min) || mp.After(res.max) {
-		return time.Time{}, 0, errors.New("invalid midpoint")
-	}
-	return res.midpoint, res.radius, nil
-}
-
 func hashLeaf(b []byte) [64]byte {
-	var r [64]byte
+	var res [64]byte
 	h := sha512.New()
 	h.Write([]byte{0})
 	h.Write(b)
-	h.Sum(r[:])
-	return r
+	h.Sum(res[:0])
+	return res
 }
 
 func hashNode(l, r [64]byte) [64]byte {
 	var res [64]byte
 	h := sha512.New()
-	h.Write([]byte{0})
+	h.Write([]byte{1})
 	h.Write(l[:])
 	h.Write(r[:])
-	h.Sum(res[:])
+	h.Sum(res[:0])
 	return res
 }
 
-func FetchRoughtime(addr string, key ed25519.PublicKey) (m time.Time, r time.Duration, err error) {
-	a, err := net.ResolveUDPAddr("udp", addr)
+type Server struct {
+	Address   string
+	PublicKey ed25519.PublicKey
+}
+
+func FetchRoughtime(s *Server) (m time.Time, r time.Duration, err error) {
+	a, err := net.ResolveUDPAddr("udp", s.Address)
 	if err != nil {
 		return m, r, err
 	}
@@ -234,10 +203,44 @@ func FetchRoughtime(addr string, key ed25519.PublicKey) (m time.Time, r time.Dur
 		return m, r, err
 	}
 	msg = msg[:n]
-	var resp response
-	if err = wire.Decode(msg, resp.decode); err != nil {
-		return m, r, err
+
+	return ParseResponse(msg, req.nonce[:], s.PublicKey)
+}
+
+func ParseResponse(resp, nonce []byte, root ed25519.PublicKey) (m time.Time, r time.Duration, err error) {
+	var res response
+	if err := wire.Decode(resp, res.decode); err != nil {
+		return time.Time{}, 0, err
 	}
-	// TODO: Validate response
-	return resp.midpoint, resp.radius, nil
+	if len(nonce) != 64 {
+		panic("nonce has wrong length")
+	}
+	if !ed25519.Verify(root, append(contextCertificate, res.certificate.delegation.raw...), res.certificate.signature[:]) {
+		return time.Time{}, 0, errors.New("bad delegation")
+	}
+	if !ed25519.Verify(res.certificate.delegation.publicKey[:], append(contextSignedResponse, res.signedResponse.raw...), res.signature[:]) {
+		return time.Time{}, 0, errors.New("bad signature")
+	}
+
+	idx := res.index
+	path := res.path
+	hash := hashLeaf(nonce)
+	for len(path) > 0 {
+		if idx&1 == 0 {
+			hash = hashNode(hash, path[0])
+		} else {
+			hash = hashNode(path[0], hash)
+		}
+		idx >>= 1
+		path = path[1:]
+	}
+	if hash != res.root {
+		return time.Time{}, 0, errors.New("nonce does not match")
+	}
+
+	mp := res.midpoint
+	if mp.Before(res.min) || mp.After(res.max) {
+		return time.Time{}, 0, errors.New("invalid midpoint")
+	}
+	return res.midpoint, res.radius, nil
 }
