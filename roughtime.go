@@ -8,7 +8,9 @@ import (
 	"net"
 	"time"
 
+	config "github.com/Merovius/roughtime/internal/config"
 	"github.com/Merovius/roughtime/internal/wire"
+	"github.com/golang/protobuf/jsonpb"
 
 	"golang.org/x/crypto/ed25519"
 )
@@ -165,46 +167,66 @@ func hashNode(l, r [64]byte) [64]byte {
 	return res
 }
 
+func ensureNonce(nonce []byte) ([]byte, error) {
+	if nonce != nil {
+		if len(nonce) != 64 {
+			panic("nonce needs to have 64 bytes")
+		}
+		return nonce, nil
+	}
+	nonce = make([]byte, 64)
+	_, err := io.ReadFull(rand.Reader, nonce)
+	return nonce, err
+}
+
 type Server struct {
 	Address   string
 	PublicKey ed25519.PublicKey
 }
 
-func FetchRoughtime(s *Server) (m time.Time, r time.Duration, err error) {
+func fetchRoughtime(s *Server, nonce []byte) ([]byte, error) {
 	a, err := net.ResolveUDPAddr("udp", s.Address)
 	if err != nil {
-		return m, r, err
+		return nil, err
 	}
 	conn, err := net.ListenUDP("udp", &net.UDPAddr{})
 	if err != nil {
-		return m, r, err
+		return nil, err
 	}
 	defer conn.Close()
 
+	if len(nonce) != 64 {
+		panic("nonce has wrong length")
+	}
+
 	var req request
-	_, err = io.ReadFull(rand.Reader, req.nonce[:])
-	if err != nil {
-		return m, r, err
-	}
-	for i := 0; i < 64; i++ {
-		req.nonce[i] = byte(i)
-	}
+	copy(req.nonce[:], nonce)
 	msg := wire.Encode(req.encode)
 	if len(msg) != 1024 {
 		panic("message too short")
 	}
 	_, err = conn.WriteTo(msg, a)
 	if err != nil {
-		return m, r, err
+		return nil, err
 	}
 	msg = msg[:1024]
 	n, _, err := conn.ReadFromUDP(msg)
 	if err != nil {
+		return nil, err
+	}
+	return msg[:n], nil
+}
+
+func FetchRoughtime(s *Server, nonce []byte) (m time.Time, r time.Duration, err error) {
+	nonce, err = ensureNonce(nonce)
+	if err != nil {
 		return m, r, err
 	}
-	msg = msg[:n]
-
-	return ParseResponse(msg, req.nonce[:], s.PublicKey)
+	msg, err := fetchRoughtime(s, nonce)
+	if err != nil {
+		return m, r, err
+	}
+	return ParseResponse(msg, nonce, s.PublicKey)
 }
 
 func ParseResponse(resp, nonce []byte, root ed25519.PublicKey) (m time.Time, r time.Duration, err error) {
@@ -213,7 +235,7 @@ func ParseResponse(resp, nonce []byte, root ed25519.PublicKey) (m time.Time, r t
 		return time.Time{}, 0, err
 	}
 	if len(nonce) != 64 {
-		panic("nonce has wrong length")
+		panic("nonce needs to have 64 bytes")
 	}
 	if !ed25519.Verify(root, append(contextCertificate, res.certificate.delegation.raw...), res.certificate.signature[:]) {
 		return time.Time{}, 0, errors.New("bad delegation")
@@ -243,4 +265,76 @@ func ParseResponse(resp, nonce []byte, root ed25519.PublicKey) (m time.Time, r t
 		return time.Time{}, 0, errors.New("invalid midpoint")
 	}
 	return res.midpoint, res.radius, nil
+}
+
+func Chain(w io.Writer, s *config.ServersJSON, nonce []byte) error {
+	nonce, err := ensureNonce(nonce)
+	if err != nil {
+		return err
+	}
+
+	c := new(config.Chain)
+	c.Links = make([]*config.Link, len(s.Servers))
+	for i, s := range s.Servers {
+		l := &config.Link{
+			PublicKeyType:   s.PublicKeyType,
+			ServerPublicKey: s.PublicKey,
+		}
+		l.NonceOrBlind = nonce
+		if i > 0 {
+			l.NonceOrBlind = make([]byte, 64)
+			_, err = io.ReadFull(rand.Reader, l.NonceOrBlind)
+			if err != nil {
+				return err
+			}
+			nonce = hash512(hash512(c.Links[i-1].Reply), l.NonceOrBlind)
+		}
+		resp, err := fetchRoughtime(&Server{Address: s.Addresses[0].Address, PublicKey: s.PublicKey}, nonce)
+		if err != nil {
+			return err
+		}
+		l.Reply = resp
+		c.Links[i] = l
+		if _, _, err = ParseResponse(resp, nonce, s.PublicKey); err != nil {
+			return err
+		}
+	}
+	return new(jsonpb.Marshaler).Marshal(w, c)
+}
+
+func ReadServersJSON(r io.Reader) (*config.ServersJSON, error) {
+	servers := new(config.ServersJSON)
+	return servers, jsonpb.Unmarshal(r, servers)
+}
+
+func VerifyChain(r io.Reader, s *config.ServersJSON) error {
+	byKey := make(map[string]string)
+	for _, s := range s.Servers {
+		byKey[string(s.PublicKey)] = s.Name
+	}
+	c := new(config.Chain)
+	if err := jsonpb.Unmarshal(r, c); err != nil {
+		return err
+	}
+	var prevHash []byte
+	for i, l := range c.Links {
+		nonce := l.NonceOrBlind
+		if i > 0 {
+			nonce = hash512(prevHash, l.NonceOrBlind)
+		}
+		_, _, err := ParseResponse(l.Reply, nonce, l.ServerPublicKey)
+		if err != nil {
+			return err
+		}
+		prevHash = hash512(l.Reply)
+	}
+	return nil
+}
+
+func hash512(b ...[]byte) []byte {
+	h := sha512.New()
+	for _, b := range b {
+		h.Write(b)
+	}
+	return h.Sum(nil)
 }
