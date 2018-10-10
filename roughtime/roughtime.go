@@ -1,4 +1,4 @@
-package roughtime
+package roughtime // import "github.com/Merovius/notary/roughtime"
 
 import (
 	"crypto/rand"
@@ -8,8 +8,8 @@ import (
 	"net"
 	"time"
 
-	config "github.com/Merovius/roughtime/internal/config"
-	"github.com/Merovius/roughtime/internal/wire"
+	config "github.com/Merovius/notary/internal/config"
+	"github.com/Merovius/notary/internal/wire"
 	"github.com/golang/protobuf/jsonpb"
 
 	"golang.org/x/crypto/ed25519"

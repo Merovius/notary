@@ -9,8 +9,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/Merovius/roughtime"
-	config "github.com/Merovius/roughtime/internal/config"
+	config "github.com/Merovius/notary/internal/config"
+	"github.com/Merovius/notary/roughtime"
 )
 
 func main() {
