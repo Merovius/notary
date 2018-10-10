@@ -307,14 +307,10 @@ func ReadServersJSON(r io.Reader) (*config.ServersJSON, error) {
 	return servers, jsonpb.Unmarshal(r, servers)
 }
 
-func VerifyChain(r io.Reader, s *config.ServersJSON) error {
+func VerifyChain(c *config.Chain, s *config.ServersJSON) error {
 	byKey := make(map[string]string)
 	for _, s := range s.Servers {
 		byKey[string(s.PublicKey)] = s.Name
-	}
-	c := new(config.Chain)
-	if err := jsonpb.Unmarshal(r, c); err != nil {
-		return err
 	}
 	var prevHash []byte
 	for i, l := range c.Links {
@@ -329,6 +325,14 @@ func VerifyChain(r io.Reader, s *config.ServersJSON) error {
 		prevHash = hash512(l.Reply)
 	}
 	return nil
+}
+
+func LoadChain(r io.Reader) (*config.Chain, error) {
+	c := new(config.Chain)
+	if err := jsonpb.Unmarshal(r, c); err != nil {
+		return nil, err
+	}
+	return c, nil
 }
 
 func hash512(b ...[]byte) []byte {

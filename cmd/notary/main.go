@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"crypto/sha512"
 	"flag"
 	"io"
 	"log"
@@ -16,20 +18,53 @@ func main() {
 	serversJSON := flag.String("servers", "", "server-list to use")
 	flag.Parse()
 
+	if flag.NArg() < 1 {
+		log.Fatalf("usage: %s [-servers <servers.json>] [-verify] <file>", os.Args[0])
+		return
+	}
+
 	servers, err := serverList(*serversJSON)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	if *verify {
-		if err := roughtime.VerifyChain(os.Stdin, servers); err != nil {
-			log.Fatal(err)
-		}
-		return
-	}
-	if err := roughtime.Chain(os.Stdout, servers, nil); err != nil {
+	nonce, err := hashFile(flag.Arg(0))
+	if err != nil {
 		log.Fatal(err)
 	}
+
+	if *verify {
+		c, err := roughtime.LoadChain(os.Stdin)
+		if err != nil {
+			log.Fatal(err)
+		}
+		if err := roughtime.VerifyChain(c, servers); err != nil {
+			log.Fatal(err)
+		}
+		if len(c.Links) == 0 || bytes.Compare(c.Links[0].NonceOrBlind, nonce) != 0 {
+			log.Fatal("chain nonce does not match file")
+		}
+
+		return
+	}
+
+	if err := roughtime.Chain(os.Stdout, servers, nonce); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func hashFile(name string) ([]byte, error) {
+	f, err := os.Open(flag.Arg(0))
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	h := sha512.New()
+	if _, err = io.Copy(h, f); err != nil {
+		return nil, err
+	}
+	return h.Sum(nil), nil
 }
 
 func serverList(name string) (*config.ServersJSON, error) {
