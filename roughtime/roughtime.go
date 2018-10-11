@@ -179,6 +179,7 @@ func ensureNonce(nonce []byte) ([]byte, error) {
 	return nonce, err
 }
 
+// Server configures a server to connect to.
 type Server struct {
 	Address   string
 	PublicKey ed25519.PublicKey
@@ -217,6 +218,10 @@ func fetchRoughtime(s *Server, nonce []byte) ([]byte, error) {
 	return msg[:n], nil
 }
 
+// FetchRoughtime fetches the current time from the given server, using the
+// given nonce. Nonce has to be 64 bytes long or nil, in which case a random
+// nonce is generated. The server response is verified and any verification
+// error is returned.
 func FetchRoughtime(s *Server, nonce []byte) (m time.Time, r time.Duration, err error) {
 	nonce, err = ensureNonce(nonce)
 	if err != nil {
@@ -229,6 +234,8 @@ func FetchRoughtime(s *Server, nonce []byte) (m time.Time, r time.Duration, err 
 	return ParseResponse(msg, nonce, s.PublicKey)
 }
 
+// ParseResponse parses a roughtime response and validates it against the given
+// nonce and root key. Any validation error is returned.
 func ParseResponse(resp, nonce []byte, root ed25519.PublicKey) (m time.Time, r time.Duration, err error) {
 	var res response
 	if err := wire.Decode(resp, res.decode); err != nil {
@@ -267,6 +274,8 @@ func ParseResponse(resp, nonce []byte, root ed25519.PublicKey) (m time.Time, r t
 	return res.midpoint, res.radius, nil
 }
 
+// Chain runs a chain of request against a list of servers and stores the
+// result as JSON in w.
 func Chain(w io.Writer, s *config.ServersJSON, nonce []byte) error {
 	nonce, err := ensureNonce(nonce)
 	if err != nil {
@@ -302,11 +311,14 @@ func Chain(w io.Writer, s *config.ServersJSON, nonce []byte) error {
 	return new(jsonpb.Marshaler).Marshal(w, c)
 }
 
+// ReadServersJSON reads a servers.json from r.
 func ReadServersJSON(r io.Reader) (*config.ServersJSON, error) {
 	servers := new(config.ServersJSON)
 	return servers, jsonpb.Unmarshal(r, servers)
 }
 
+// VerifyChain verifies the given chain against the list of servers and outputs
+// any validation errors.
 func VerifyChain(c *config.Chain, s *config.ServersJSON) error {
 	byKey := make(map[string]string)
 	for _, s := range s.Servers {
@@ -327,6 +339,7 @@ func VerifyChain(c *config.Chain, s *config.ServersJSON) error {
 	return nil
 }
 
+// LoadChain loads a serialized chain from r.
 func LoadChain(r io.Reader) (*config.Chain, error) {
 	c := new(config.Chain)
 	if err := jsonpb.Unmarshal(r, c); err != nil {

@@ -19,6 +19,8 @@ var (
 	errInvalidDuration  = errors.New("invalid duration")
 )
 
+// DecodeState holds state about the decoding process. It is not supposed to be
+// used directly - call Decode instead.
 type DecodeState struct {
 	hdr  []byte
 	body []byte
@@ -29,6 +31,8 @@ type DecodeState struct {
 
 var sentinel = new(int8)
 
+// Decode runs f to decode msg. f can use the passed DecodeState to extract the
+// wanted fields.
 func Decode(msg []byte, f func(st *DecodeState)) (err error) {
 	defer func() {
 		if v := recover(); v != nil && v != sentinel {
@@ -41,6 +45,7 @@ func Decode(msg []byte, f func(st *DecodeState)) (err error) {
 	return nil
 }
 
+// Abort aborts the coding process with the given error.
 func (d *DecodeState) Abort(e error) {
 	if e != nil {
 		*d.err = e
@@ -48,27 +53,28 @@ func (d *DecodeState) Abort(e error) {
 	}
 }
 
-func (d *DecodeState) SetMessage(b []byte) {
-	if len(b) < 4 {
+// SetMessage validates the message header of msg and starts decoding.
+func (d *DecodeState) SetMessage(msg []byte) {
+	if len(msg) < 4 {
 		d.Abort(errMsgTooShort)
 	}
-	d.n = binary.LittleEndian.Uint32(b)
-	if uint32(len(b))/8 < d.n {
+	d.n = binary.LittleEndian.Uint32(msg)
+	if uint32(len(msg))/8 < d.n {
 		d.Abort(errMsgTooShort)
 	}
 	var (
-		t = binary.LittleEndian.Uint32(b[4*d.n:])
+		t = binary.LittleEndian.Uint32(msg[4*d.n:])
 		o uint32
 	)
 	for i := uint32(1); i < d.n; i++ {
-		o2, t2 := binary.LittleEndian.Uint32(b[i*4:]), binary.LittleEndian.Uint32(b[d.n*4+i*4:])
-		if t2 <= t || o2 < o || o2 >= uint32(len(b)) {
+		o2, t2 := binary.LittleEndian.Uint32(msg[i*4:]), binary.LittleEndian.Uint32(msg[d.n*4+i*4:])
+		if t2 <= t || o2 < o || o2 >= uint32(len(msg)) {
 			d.Abort(errInvalidMessage)
 		}
 		t, o = t2, o2
 	}
-	d.hdr = b[0 : 8*d.n : 8*d.n]
-	d.body = b[8*d.n:]
+	d.hdr = msg[0 : 8*d.n : 8*d.n]
+	d.body = msg[8*d.n:]
 }
 
 func (d *DecodeState) field(i uint32) (Tag, []byte) {
@@ -86,6 +92,9 @@ func (d *DecodeState) field(i uint32) (Tag, []byte) {
 	return tag, d.body[start:end]
 }
 
+// Bytes advances through the fields of the message until it finds t and stores
+// a slice to the corresponding data in p. The stored slice aliases the message
+// buffer.
 func (d *DecodeState) Bytes(t Tag, p *[]byte) {
 	for ; d.i < d.n; d.i++ {
 		tag, value := d.field(d.i)
@@ -102,6 +111,8 @@ func (d *DecodeState) Bytes(t Tag, p *[]byte) {
 	d.Abort(errFieldMissing)
 }
 
+// Uint32 advances through the fields of the message until it finds t and stores
+// the corresponding value as an uint32 in p.
 func (d *DecodeState) Uint32(t Tag, p *uint32) {
 	var buf []byte
 	d.Bytes(t, &buf)
@@ -111,6 +122,8 @@ func (d *DecodeState) Uint32(t Tag, p *uint32) {
 	*p = binary.LittleEndian.Uint32(buf)
 }
 
+// Uint64 advances through the fields of the message until it finds t and stores
+// the corresponding value as an uint64 in p.
 func (d *DecodeState) Uint64(t Tag, p *uint64) {
 	var buf []byte
 	d.Bytes(t, &buf)
@@ -120,6 +133,8 @@ func (d *DecodeState) Uint64(t Tag, p *uint64) {
 	*p = binary.LittleEndian.Uint64(buf)
 }
 
+// Bytes32 advances through the fields of the message until it finds t and stores
+// the corresponding value (which must be 32 bytes long) into p.
 func (d *DecodeState) Bytes32(t Tag, p *[32]byte) {
 	var buf []byte
 	d.Bytes(t, &buf)
@@ -129,6 +144,8 @@ func (d *DecodeState) Bytes32(t Tag, p *[32]byte) {
 	copy((*p)[:], buf)
 }
 
+// Bytes64 advances through the fields of the message until it finds t and stores
+// the corresponding value (which must be 64 bytes long) into p.
 func (d *DecodeState) Bytes64(t Tag, p *[64]byte) {
 	var buf []byte
 	d.Bytes(t, &buf)
@@ -138,6 +155,9 @@ func (d *DecodeState) Bytes64(t Tag, p *[64]byte) {
 	copy((*p)[:], buf)
 }
 
+// Message advances through the fields of the message until it finds t. The
+// corresponding value is then decoded using f and also stored in raw. raw
+// aliases the message buffer.
 func (d *DecodeState) Message(t Tag, raw *[]byte, f func(*DecodeState)) {
 	var buf []byte
 	d.Bytes(t, &buf)
@@ -150,6 +170,9 @@ func (d *DecodeState) Message(t Tag, raw *[]byte, f func(*DecodeState)) {
 	*raw = buf
 }
 
+// Time advances through the fields of the message until it finds t and stores
+// the corresponding value (interpreted as an uint64 of microseconds since the
+// epoch) into p.
 func (d *DecodeState) Time(t Tag, p *time.Time) {
 	var v uint64
 	d.Uint64(t, &v)
@@ -159,6 +182,9 @@ func (d *DecodeState) Time(t Tag, p *time.Time) {
 	*p = time.Unix(int64(v)/1e6, (int64(v)%1e6)*1e3)
 }
 
+// Duration advances through the fields of the message until it finds t and
+// stores the corresponding value (interpreted as an uint32 of microseconds)
+// into p.
 func (d *DecodeState) Duration(t Tag, p *time.Duration) {
 	var v uint32
 	d.Uint32(t, &v)
