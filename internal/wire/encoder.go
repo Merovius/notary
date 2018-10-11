@@ -23,15 +23,20 @@ func Encode(f func(st *EncodeState)) []byte {
 }
 
 func (e *EncodeState) NTags(n uint32) {
-	binary.LittleEndian.PutUint32(e.msg, n)
-	e.hdr = e.msg[0 : 8*n : 8*n]
-	e.body = e.msg[8*n : 8*n : len(e.msg)]
+	if n == 0 {
+		e.hdr = e.msg[:4]
+		e.body = e.msg[4:4:len(e.msg)]
+	} else {
+		binary.LittleEndian.PutUint32(e.msg, n)
+		e.hdr = e.msg[0 : 8*n : 8*n]
+		e.body = e.msg[8*n : 8*n : len(e.msg)]
+	}
 	e.n = n
 	e.i = 0
 }
 
 func (e *EncodeState) Length() int {
-	return 8*int(e.n) + len(e.body)
+	return len(e.hdr) + len(e.body)
 }
 
 func (e *EncodeState) Bytes(t Tag, n int) []byte {

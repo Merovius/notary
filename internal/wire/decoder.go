@@ -3,7 +3,7 @@ package wire
 import (
 	"encoding/binary"
 	"errors"
-	"runtime/debug"
+	"fmt"
 	"time"
 )
 
@@ -31,9 +31,7 @@ var sentinel = new(int8)
 
 func Decode(msg []byte, f func(st *DecodeState)) (err error) {
 	defer func() {
-		if v := recover(); v == sentinel {
-			debug.PrintStack()
-		} else if v != nil {
+		if v := recover(); v != nil && v != sentinel {
 			panic(v)
 		}
 	}()
@@ -73,26 +71,31 @@ func (d *DecodeState) SetMessage(b []byte) {
 	d.body = b[8*d.n:]
 }
 
+func (d *DecodeState) field(i uint32) (Tag, []byte) {
+	tag := Tag(binary.LittleEndian.Uint32(d.hdr[d.n*4+i*4:]))
+	start, end := uint32(0), uint32(len(d.body))
+	if i > 0 {
+		start = binary.LittleEndian.Uint32(d.hdr[i*4:])
+	}
+	if i+1 < d.n {
+		end = binary.LittleEndian.Uint32(d.hdr[(i+1)*4:])
+	}
+	if end < start || ((end-start)%4 != 0) {
+		d.Abort(errInvalidField)
+	}
+	return tag, d.body[start:end]
+}
+
 func (d *DecodeState) Bytes(t Tag, p *[]byte) {
 	for ; d.i < d.n; d.i++ {
-		tag := Tag(binary.LittleEndian.Uint32(d.hdr[d.n*4+d.i*4:]))
+		tag, value := d.field(d.i)
 		if tag > t {
 			continue
 		}
 		if tag < t {
-			d.Abort(errFieldMissing)
+			d.Abort(fmt.Errorf("field %v missing", t))
 		}
-		start, end := uint32(0), uint32(len(d.body))
-		if d.i > 0 {
-			start = binary.LittleEndian.Uint32(d.hdr[d.i*4:])
-		}
-		if d.i+1 < d.n {
-			end = binary.LittleEndian.Uint32(d.hdr[(d.i+1)*4:])
-		}
-		if end < start || ((end-start)%4 != 0) {
-			d.Abort(errInvalidField)
-		}
-		*p = d.body[start:end]
+		*p = value
 		d.i++
 		return
 	}
